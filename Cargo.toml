@@ -1,0 +1,8 @@
+[package]
+name = "trace-alloc"
+version = "0.0.0"
+edition = "2024"
+license = "MIT"
+description = "Allocator wrapper for debugging and tracing"
+
+[dependencies]
