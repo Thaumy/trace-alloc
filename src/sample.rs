@@ -76,9 +76,9 @@ impl Sample {
         if left <= size {
             self.bytes_to_sample
                 .store(cfg.sample_period_bytes, Ordering::Relaxed);
-            let (max, acc, alive) = count.load();
+            let (peak, acc, alive, growth, shink) = count.load();
             let mut dump = cfg.dump.lock().expect("failed to get dump lock");
-            let _ = writeln!(dump, "@{max} {acc} {alive}");
+            let _ = writeln!(dump, "@{peak} {acc} {alive} {growth} {shink}");
         }
     }
 }

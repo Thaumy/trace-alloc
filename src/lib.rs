@@ -21,6 +21,8 @@ impl<A> TraceAllocator<A> {
             acc_bytes: AtomicU64::new(0),
             alive_bytes: AtomicUsize::new(0),
             peak_alive_bytes: AtomicUsize::new(0),
+            realloc_growth_count: AtomicU64::new(0),
+            realloc_shrink_count: AtomicU64::new(0),
             sample,
         };
         Self { allocator, count }
@@ -58,8 +60,10 @@ where
             let old_size = layout.size();
             if new_size > old_size {
                 self.count.alloc(new_size - old_size);
+                self.count.realloc_growth();
             } else {
                 self.count.dealloc(old_size - new_size);
+                self.count.realloc_shrink();
             }
         }
         ptr
