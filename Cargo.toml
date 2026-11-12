@@ -6,3 +6,4 @@ license = "MIT"
 description = "Allocator wrapper for debugging and tracing"
 
 [dependencies]
+backtrace = "0.3"

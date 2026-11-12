@@ -6,6 +6,8 @@ use std::path::Path;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{LazyLock, Mutex};
 
+use backtrace::Backtrace;
+
 use crate::count::Count;
 
 struct Config {
@@ -79,6 +81,10 @@ impl Sample {
             let (peak, acc, alive, growth, shink) = count.load();
             let mut dump = cfg.dump.lock().expect("failed to get dump lock");
             let _ = writeln!(dump, "@{peak} {acc} {alive} {growth} {shink}");
+
+            let bt = Backtrace::new_unresolved();
+            let addrs = bt.frames().iter().map(|f| f.ip().addr());
+            let _ = writeln!(dump, "!{peak} {acc} {alive} {growth} {shink}");
         }
     }
 }
