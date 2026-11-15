@@ -8,3 +8,17 @@ description = "Allocator wrapper for debugging and tracing"
 [dependencies]
 backtrace = "0.3"
 libc = "0.2"
+addr2line = { version = "0.27", default-features = false, features = [
+  "std",
+  "rustc-demangle",
+  "fallible-iterator",
+  "smallvec",
+] }
+clap = { version = "4", features = ["derive"] }
+gimli = { version = "0.34", default-features = false, features = ["read-all"] }
+object = { version = "0.40", default-features = false, features = [
+  "read",
+  "std",
+] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
