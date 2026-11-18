@@ -1,5 +1,4 @@
 use std::borrow::Cow;
-use std::collections::HashSet;
 use std::fs;
 use std::fs::File;
 use std::io::{self, BufReader, BufWriter, Read, Write};
@@ -68,7 +67,7 @@ fn main() -> io::Result<()> {
                 .as_ref()
                 .is_none_or(|previous| !Arc::ptr_eq(previous, &sample.loaded_elfs))
             {
-                symbolizer = Symbolizer::new(&sample.loaded_elfs, &sample.call_chain);
+                symbolizer = Symbolizer::new(&sample.loaded_elfs);
                 loaded_elfs = Some(Arc::clone(&sample.loaded_elfs));
             }
             let output = Sample {
@@ -100,48 +99,19 @@ fn byte_stream(path: &Path) -> impl Iterator<Item = u8> {
 }
 
 impl Symbolizer {
-    fn new(images: &[(u64, PathBuf)], addresses: &[u64]) -> Self {
+    fn new(images: &[(u64, PathBuf)]) -> Self {
         let mut modules = Vec::new();
-        let exe = images.first().map(|(_, path)| path.as_path());
 
-        if let Some(exe) = exe
-            && let Some(mut module) = Module::load(exe, true)
+        if let Some((base, path)) = images.first()
+            && let Some(mut module) = Module::load(path, true)
         {
-            module.base = Some(images[0].0);
-            if module.base.is_some() {
-                modules.push(module);
-            }
+            module.base = Some(*base);
+            modules.push(module);
         }
 
-        for (slide, path) in images.iter().skip(1) {
+        for (base, path) in images.iter().skip(1) {
             if let Some(mut module) = Module::load(path, false) {
-                module.base = Some(*slide);
-                if module.base.is_some() {
-                    modules.push(module);
-                }
-            }
-        }
-
-        let mut unresolved = addresses
-            .iter()
-            .copied()
-            .filter(|address| {
-                *address != 0
-                    && !modules
-                        .iter()
-                        .any(|module| module.resolve(*address).is_some())
-            })
-            .collect::<Vec<_>>();
-        unresolved.sort_unstable();
-        unresolved.dedup();
-
-        if !unresolved.is_empty()
-            && let Some(path) = libc_path()
-            && !exe.is_some_and(|exe| same_file(&path, exe))
-            && let Some(mut module) = Module::load(&path, false)
-        {
-            module.base = infer_libc_base(&module.segments, &module.symbols, &unresolved);
-            if module.base.is_some() {
+                module.base = Some(*base);
                 modules.push(module);
             }
         }
@@ -303,116 +273,10 @@ fn lookup_symbol(symbols: &[(u64, u64, String)], address: u64) -> Option<&(u64, 
     Some(symbol)
 }
 
-fn infer_libc_base(
-    segments: &[(u64, u64)],
-    symbols: &[(u64, u64, String)],
-    addresses: &[u64],
-) -> Option<u64> {
-    if segments.is_empty() || symbols.is_empty() || addresses.is_empty() {
-        return None;
-    }
-
-    let candidates = base_candidates(segments, addresses);
-    let scoring = &addresses[..addresses.len().min(2048)];
-    let mut best = None;
-    let mut best_key = (0, 0);
-
-    for base in candidates {
-        let mut start_hits = 0;
-        let mut symbol_hits = 0;
-
-        for &address in scoring {
-            if !address_in_segments(segments, base, address) {
-                continue;
-            }
-            let Some(rva) = address.checked_sub(base) else {
-                continue;
-            };
-            let Some((_, _, name)) = lookup_symbol(symbols, rva) else {
-                continue;
-            };
-            symbol_hits += 1;
-            if name.contains("libc_start") || name.contains("start_main") {
-                start_hits += 1;
-            }
-        }
-
-        let key = (start_hits, symbol_hits);
-        if key > best_key {
-            best = Some(base);
-            best_key = key;
-        }
-    }
-
-    if best_key.1 >= 1 { best } else { None }
-}
-
-fn base_candidates(segments: &[(u64, u64)], addresses: &[u64]) -> HashSet<u64> {
-    let mut candidates = HashSet::new();
-    for &address in addresses.iter().take(32) {
-        for &(vaddr, size) in segments {
-            if size == 0 {
-                continue;
-            }
-
-            let end = vaddr.saturating_add(size);
-            let mut rva = (vaddr & !0xfff) | (address & 0xfff);
-            if rva < vaddr {
-                rva = rva.saturating_add(0x1000);
-            }
-
-            while rva < end {
-                if let Some(base) = address.checked_sub(rva) {
-                    candidates.insert(base);
-                }
-                rva = rva.saturating_add(0x1000);
-            }
-        }
-    }
-    candidates
-}
-
 fn address_in_segments(segments: &[(u64, u64)], base: u64, address: u64) -> bool {
     segments.iter().any(|&(vaddr, size)| {
         let start = base.saturating_add(vaddr);
         let end = start.saturating_add(size);
         address >= start && address < end
     })
-}
-
-#[cfg(target_os = "linux")]
-fn libc_path() -> Option<PathBuf> {
-    let maps = fs::read_to_string("/proc/self/maps").ok()?;
-
-    for line in maps.lines() {
-        let mut fields = line.split_whitespace();
-        let (Some(_), Some(perms)) = (fields.next(), fields.next()) else {
-            continue;
-        };
-        let _ = (fields.next(), fields.next(), fields.next());
-        let path = fields.collect::<Vec<_>>().join(" ");
-
-        if !perms.contains('x') || !path.starts_with('/') {
-            continue;
-        }
-
-        let name = Path::new(&path).file_name()?.to_str()?;
-        if name.starts_with("libc.so") || name.starts_with("libc-") {
-            return Some(PathBuf::from(path));
-        }
-    }
-
-    None
-}
-
-#[cfg(not(target_os = "linux"))]
-fn libc_path() -> Option<PathBuf> {
-    None
-}
-
-fn same_file(left: &Path, right: &Path) -> bool {
-    match (fs::canonicalize(left), fs::canonicalize(right)) {
-        (Ok(left), Ok(right)) => left == right,
-        _ => false,
-    }
 }
